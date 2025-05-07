@@ -1,0 +1,13 @@
+{
+  "expo": {
+    "name": "coffee-shop-mobile",
+    "slug": "coffee-shop-mobile",
+    "version": "1.0.0",
+    "extra": {
+      "eas": {
+        "projectId": "6cdc94f7-df13-4b80-b4f8-eaf57eba51bb"
+      }
+    },
+    "owner": "yiyanglin0102"
+  }
+}
