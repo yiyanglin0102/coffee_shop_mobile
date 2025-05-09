@@ -21,18 +21,32 @@ const PaymentScreen = () => {
   const route = useRoute();
   const { total = '0.00' } = route.params || {};
 
+  // Test card details
+  const TEST_CARD = {
+    number: '4111 1111 1111 1111',
+    cvv: '111',
+    expiry: '12/25',
+    name: 'TEST CARD'
+  };
+
   const [paymentMethod, setPaymentMethod] = useState('card');
   const [isProcessing, setIsProcessing] = useState(false);
   const [isCardFront, setIsCardFront] = useState(true);
-  const [readerStatus, setReaderStatus] = useState('checking'); // 'checking', 'connected', 'disconnected'
+  const [readerStatus, setReaderStatus] = useState('checking');
+  const [readerDetails, setReaderDetails] = useState(null);
   const [sdkAvailable, setSdkAvailable] = useState(false);
   const flipAnim = useRef(new Animated.Value(0)).current;
   const spinAnim = useRef(new Animated.Value(0)).current;
-  const [devMode] = useState(__DEV__); // Enable mock mode in development
+  const [devMode] = useState(__DEV__);
 
-  // Initialize Square module with safe defaults
+  const TARGET_SERIAL_NUMBER = "429LS22205005721";
+
+  // Initialize Square module
   const SquarePayment = NativeModules.SquarePayment || {
-    checkReaderConnection: () => Promise.resolve(devMode), // Mock connection in dev mode
+    checkReaderConnection: () => Promise.resolve(devMode),
+    getConnectedReaderDetails: () => Promise.resolve(
+      devMode ? { serialNumber: TARGET_SERIAL_NUMBER, deviceType: "MOCK" } : null
+    ),
     startPayment: () => devMode ? 
       Promise.resolve({ transactionId: 'mock_' + Date.now() }) : 
       Promise.reject(new Error('Square module not available')),
@@ -69,6 +83,7 @@ const PaymentScreen = () => {
   useEffect(() => {
     if (devMode) {
       setReaderStatus('connected');
+      setReaderDetails({ serialNumber: TARGET_SERIAL_NUMBER, deviceType: "MOCK" });
       return;
     }
 
@@ -76,35 +91,51 @@ const PaymentScreen = () => {
     let subscription;
     let interval;
 
-    const setupConnectionMonitoring = async () => {
+    const checkReaderDetails = async () => {
       try {
-        // Initial check
-        const isConnected = await SquarePayment.checkReaderConnection();
-        setReaderStatus(isConnected ? 'connected' : 'disconnected');
-
-        // Listen for changes
-        subscription = eventEmitter.addListener(
-          'onReaderConnectionChange',
-          ({ isConnected }) => {
-            console.log('Reader connection changed:', isConnected);
-            setReaderStatus(isConnected ? 'connected' : 'disconnected');
-          }
-        );
-
-        // Periodic checks
-        interval = setInterval(async () => {
-          try {
-            const currentStatus = await SquarePayment.checkReaderConnection();
-            setReaderStatus(currentStatus ? 'connected' : 'disconnected');
-          } catch (error) {
-            console.error('Periodic check error:', error);
-          }
-        }, 3000);
-
+        const details = await SquarePayment.getConnectedReaderDetails();
+        
+        setReaderDetails(details);
+        
+        if (details && details.serialNumber === TARGET_SERIAL_NUMBER) {
+          setReaderStatus('connected');
+        } else if (details) {
+          setReaderStatus('wrong_reader');
+        } else {
+          setReaderStatus('disconnected');
+        }
       } catch (error) {
-        console.error('Connection monitoring setup failed:', error);
+        console.error('Reader details check failed:', error);
         setReaderStatus('disconnected');
       }
+    };
+
+    const setupConnectionMonitoring = async () => {
+      await checkReaderDetails();
+      
+      subscription = eventEmitter.addListener(
+        'onReaderConnectionChange',
+        async (event) => {
+          if (event.isConnected) {
+            const details = {
+              serialNumber: event.serialNumber,
+              deviceType: event.deviceType
+            };
+            setReaderDetails(details);
+            
+            if (details.serialNumber === TARGET_SERIAL_NUMBER) {
+              setReaderStatus('connected');
+            } else {
+              setReaderStatus('wrong_reader');
+            }
+          } else {
+            setReaderStatus('disconnected');
+            setReaderDetails(null);
+          }
+        }
+      );
+
+      interval = setInterval(checkReaderDetails, 3000);
     };
 
     if (sdkAvailable) {
@@ -130,24 +161,43 @@ const PaymentScreen = () => {
   const checkConnection = async () => {
     setReaderStatus('checking');
     try {
-      const isConnected = await SquarePayment.checkReaderConnection();
-      setReaderStatus(isConnected ? 'connected' : 'disconnected');
-      return isConnected;
+      const details = await SquarePayment.getConnectedReaderDetails();
+      setReaderDetails(details);
+      
+      if (details && details.serialNumber === TARGET_SERIAL_NUMBER) {
+        setReaderStatus('connected');
+      } else if (details) {
+        setReaderStatus('wrong_reader');
+      } else {
+        setReaderStatus('disconnected');
+      }
     } catch (error) {
       console.error('Connection check failed:', error);
       setReaderStatus('disconnected');
-      return false;
     }
   };
 
   const handlePayment = async () => {
-    if (paymentMethod === 'card' && readerStatus !== 'connected') {
-      Alert.alert(
-        'Reader Not Connected',
-        'Please connect your Square reader before processing payment',
-        [{ text: 'OK' }]
-      );
-      return;
+    
+    if (paymentMethod === 'card') {
+      if (readerStatus === 'wrong_reader') {
+        Alert.alert(
+          'Wrong Reader Connected',
+          `Please connect reader with serial number: ${TARGET_SERIAL_NUMBER}\n\n` +
+          `Currently connected: ${readerDetails?.serialNumber || 'None'}`,
+          [{ text: 'OK' }]
+        );
+        return;
+      }
+      
+      if (readerStatus !== 'connected') {
+        Alert.alert(
+          'Reader Not Connected',
+          'Please connect your Square reader before processing payment',
+          [{ text: 'OK' }]
+        );
+        return;
+      }
     }
 
     setIsProcessing(true);
@@ -161,7 +211,6 @@ const PaymentScreen = () => {
           PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION,
         ]);
 
-        // Check all permissions
         const allGranted = Object.values(granted).every(
           perm => perm === PermissionsAndroid.RESULTS.GRANTED
         );
@@ -174,10 +223,11 @@ const PaymentScreen = () => {
         'USD',
         route.params?.orderId || 'N/A'
       );
-
+console.log('LOG~');
       if (!result?.transactionId) {
         throw new Error('Payment completed but no transaction ID received');
       }
+      
 
       navigation.navigate('OrderConfirmation', {
         orderId: route.params?.orderId,
@@ -215,11 +265,20 @@ const PaymentScreen = () => {
     outputRange: ['0deg', '360deg'],
   });
 
+  const getReaderStatusText = () => {
+    switch (readerStatus) {
+      case 'checking': return 'Checking reader connection...';
+      case 'connected': return `Connected to: ${readerDetails?.serialNumber || 'Unknown'}`;
+      case 'wrong_reader': return `Wrong reader: ${readerDetails?.serialNumber || 'Unknown'}`;
+      case 'disconnected': return 'Reader not connected';
+      default: return 'Unknown reader status';
+    }
+  };
+
   return (
     <View style={styles.container}>
       <Text style={styles.title}>Payment Method</Text>
 
-      {/* Payment Method Toggle */}
       <View style={styles.toggleContainer}>
         <TouchableOpacity
           style={[styles.toggleButton, paymentMethod === 'card' && styles.activeToggle]}
@@ -238,26 +297,23 @@ const PaymentScreen = () => {
         </TouchableOpacity>
       </View>
 
-      {/* Card Payment UI */}
       {paymentMethod === 'card' && (
         <>
           <View style={styles.cardContainer}>
             <TouchableOpacity onPress={flipCard} activeOpacity={0.9}>
-              {/* Front of Card */}
               <Animated.View style={[
                 styles.card,
                 styles.cardFront,
                 { transform: [{ rotateY: frontInterpolate }] }
               ]}>
                 <Image source={require('../assets/chip.png')} style={styles.chip} />
-                <Text style={styles.cardNumber}>•••• •••• •••• 4242</Text>
+                <Text style={styles.cardNumber}>{TEST_CARD.number}</Text>
                 <View style={styles.cardFooter}>
-                  <Text style={styles.cardText}>CARDHOLDER NAME</Text>
-                  <Text style={styles.cardText}>EXP 12/25</Text>
+                  <Text style={styles.cardText}>{TEST_CARD.name}</Text>
+                  <Text style={styles.cardText}>EXP {TEST_CARD.expiry}</Text>
                 </View>
               </Animated.View>
 
-              {/* Back of Card */}
               <Animated.View style={[
                 styles.card,
                 styles.cardBack,
@@ -267,35 +323,39 @@ const PaymentScreen = () => {
                 <View style={styles.cvvContainer}>
                   <Text style={styles.cvvText}>CVV</Text>
                   <View style={styles.cvvBox}>
-                    <Text style={styles.cvvNumber}>•••</Text>
+                    <Text style={styles.cvvNumber}>{TEST_CARD.cvv}</Text>
                   </View>
                 </View>
               </Animated.View>
             </TouchableOpacity>
 
             <Text style={styles.flipText}>Tap card to flip</Text>
+            <Text style={styles.testCardText}>TEST CARD: {TEST_CARD.number}</Text>
           </View>
 
-          {/* Reader Connection Status */}
           <View style={[
             styles.readerStatusContainer,
             readerStatus === 'connected' && styles.readerConnected,
-            readerStatus === 'disconnected' && styles.readerDisconnected
+            readerStatus === 'disconnected' && styles.readerDisconnected,
+            readerStatus === 'wrong_reader' && styles.readerWrong
           ]}>
             <Icon
               name="bluetooth"
               size={16}
               color={
                 readerStatus === 'connected' ? '#4CAF50' :
-                  readerStatus === 'checking' ? '#FFC107' : '#FF5722'
+                readerStatus === 'wrong_reader' ? '#FF9800' :
+                readerStatus === 'checking' ? '#FFC107' : '#FF5722'
               }
             />
-            <Text style={styles.readerStatusText}>
-              {readerStatus === 'checking' && 'Checking reader connection...'}
-              {readerStatus === 'connected' && 'Reader connected and ready'}
-              {readerStatus === 'disconnected' && 'Reader not connected'}
-            </Text>
+            <Text style={styles.readerStatusText}>{getReaderStatusText()}</Text>
           </View>
+
+          {readerStatus === 'wrong_reader' && (
+            <Text style={styles.targetReaderText}>
+              Expected reader: {TARGET_SERIAL_NUMBER}
+            </Text>
+          )}
 
           {readerStatus === 'disconnected' && (
             <TouchableOpacity 
@@ -312,7 +372,6 @@ const PaymentScreen = () => {
         </>
       )}
 
-      {/* Cash Payment UI */}
       {paymentMethod === 'cash' && (
         <View style={styles.cashContainer}>
           <Icon name="attach-money" size={80} color="#2a9d8f" />
@@ -320,7 +379,6 @@ const PaymentScreen = () => {
         </View>
       )}
 
-      {/* Payment Button */}
       <TouchableOpacity
         style={[
           styles.payButton,
@@ -456,6 +514,12 @@ const styles = StyleSheet.create({
     color: '#666',
     fontStyle: 'italic',
   },
+  testCardText: {
+    marginTop: 10,
+    color: '#666',
+    textAlign: 'center',
+    fontSize: 12,
+  },
   cashContainer: {
     alignItems: 'center',
     marginVertical: 40,
@@ -507,6 +571,9 @@ const styles = StyleSheet.create({
   readerDisconnected: {
     backgroundColor: '#ffebee',
   },
+  readerWrong: {
+    backgroundColor: '#fff3e0',
+  },
   readerStatusText: {
     marginLeft: 8,
     fontSize: 14,
@@ -527,6 +594,12 @@ const styles = StyleSheet.create({
     color: '#666',
     fontStyle: 'italic',
     marginTop: 10,
+  },
+  targetReaderText: {
+    textAlign: 'center',
+    marginBottom: 10,
+    color: '#666',
+    fontSize: 12,
   }
 });
 

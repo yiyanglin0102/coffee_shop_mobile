@@ -43,7 +43,9 @@ class MainApplication : Application(), ReactApplication {
         
         // Initialize Square Reader SDK
         ReaderSdk.initialize(this, "sq0idp-JU1z-N3oVTasKct9_-NHCQ")
-        
+        // Access token
+
+        // EAAAlz6P7au5VPDV6ROy0_8BfCnBImScruhrWt23gqJV0AW7QoC2weRtajDmff7T
         if (BuildConfig.IS_NEW_ARCHITECTURE_ENABLED) {
             load()
         }
