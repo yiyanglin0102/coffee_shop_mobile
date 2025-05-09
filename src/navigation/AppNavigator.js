@@ -4,6 +4,7 @@ import HomeScreen from '../screens/HomeScreen';
 import MenuScreen from '../screens/MenuScreen';
 import OrdersScreen from '../screens/OrdersScreen';
 import CheckoutScreen from '../screens/CheckoutScreen';
+import PaymentScreen from '../screens/PaymentScreen';
 import OrderConfirmationScreen from '../screens/OrderConfirmationScreen';
 import CartIcon from '../components/CartIcon';
 
@@ -24,7 +25,6 @@ export default function AppNavigator() {
                 component={HomeScreen}
                 options={{ title: 'Welcome' }}
             />
-
             <Stack.Screen
                 name="Menu"
                 component={MenuScreen}
@@ -33,24 +33,28 @@ export default function AppNavigator() {
                     headerRight: () => <CartIcon navigation={navigation} />,
                 })}
             />
-
             <Stack.Screen
                 name="Orders"
                 component={OrdersScreen}
-                options={{
-                    title: 'Your Orders',
-                }}
+                options={{ title: 'Your Orders' }}
             />
-
             <Stack.Screen
                 name="Checkout"
                 component={CheckoutScreen}
                 options={{ title: 'Checkout' }}
             />
             <Stack.Screen
+                name="Payment"
+                component={PaymentScreen}
+                options={{ title: 'Payment' }}
+            />
+            <Stack.Screen
                 name="OrderConfirmation"
                 component={OrderConfirmationScreen}
-                options={{ headerShown: false }}
+                options={{ 
+                    headerShown: false,
+                    gestureEnabled: false  // Prevent going back to payment screen
+                }}
             />
         </Stack.Navigator>
     );

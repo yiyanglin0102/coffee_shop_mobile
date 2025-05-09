@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { View, Text, ScrollView, TouchableOpacity, StyleSheet, TextInput } from 'react-native';
+import { View, Text, ScrollView, TouchableOpacity, StyleSheet, TextInput, Alert } from 'react-native';
 import { useNavigation } from '@react-navigation/native';
 
 const CheckoutScreen = () => {
@@ -17,16 +17,36 @@ const CheckoutScreen = () => {
   const tax = subtotal * 0.08;
   const total = subtotal + deliveryFee + tax;
 
+  // In your CheckoutScreen.js, update the handlePlaceOrder function:
   const handlePlaceOrder = () => {
-    // Process order logic here
-    navigation.navigate('OrderConfirmation', { orderId: Math.random().toString(36).substr(2, 9) });
+    // Validate address for delivery
+    if (deliveryOption === 'delivery' && !address.trim()) {
+      Alert.alert('Address Required', 'Please enter your delivery address');
+      return;
+    }
+
     const orderId = `ORDER-${Math.floor(Math.random() * 1000000)}`;
 
-    navigation.navigate('OrderConfirmation', {
-      orderId,
-      total: total.toFixed(2),
-      items: cartItems // Pass the entire cart if needed
-    });
+    if (paymentMethod === 'card') {
+      // Navigate to PaymentScreen for card payments
+      navigation.navigate('Payment', {
+        total: total.toFixed(2),
+        orderId,
+        cartItems,
+        deliveryOption,
+        address: deliveryOption === 'delivery' ? address : null
+      });
+    } else {
+      // Direct to confirmation for cash payments
+      navigation.navigate('OrderConfirmation', {
+        orderId,
+        total: total.toFixed(2),
+        paymentMethod: 'cash',
+        items: cartItems,
+        deliveryOption,
+        address: deliveryOption === 'delivery' ? address : null
+      });
+    }
   };
 
   return (
@@ -62,16 +82,17 @@ const CheckoutScreen = () => {
           {deliveryOption === 'delivery' && (
             <TextInput
               style={styles.input}
-              placeholder="Delivery Address"
+              placeholder="Enter delivery address"
               value={address}
               onChangeText={setAddress}
+              pointerEvents="auto" // Allows interaction with the input
             />
           )}
         </View>
 
         {/* Payment Method */}
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Payment</Text>
+        <View style={styles.paymentSection}>
+          <Text style={styles.sectionTitle}>Payment Method</Text>
           <TouchableOpacity
             style={[styles.optionButton, paymentMethod === 'card' && styles.selectedOption]}
             onPress={() => setPaymentMethod('card')}
@@ -82,7 +103,7 @@ const CheckoutScreen = () => {
             style={[styles.optionButton, paymentMethod === 'cash' && styles.selectedOption]}
             onPress={() => setPaymentMethod('cash')}
           >
-            <Text>💵 Cash on Delivery</Text>
+            <Text>💵 Cash {deliveryOption === 'delivery' ? 'on Delivery' : 'at Pickup'}</Text>
           </TouchableOpacity>
         </View>
 
@@ -92,12 +113,14 @@ const CheckoutScreen = () => {
             <Text>Subtotal:</Text>
             <Text>${subtotal.toFixed(2)}</Text>
           </View>
+          {deliveryOption === 'delivery' && (
+            <View style={styles.totalRow}>
+              <Text>Delivery Fee:</Text>
+              <Text>${deliveryFee.toFixed(2)}</Text>
+            </View>
+          )}
           <View style={styles.totalRow}>
-            <Text>Delivery:</Text>
-            <Text>${deliveryFee.toFixed(2)}</Text>
-          </View>
-          <View style={styles.totalRow}>
-            <Text>Tax:</Text>
+            <Text>Tax (8%):</Text>
             <Text>${tax.toFixed(2)}</Text>
           </View>
           <View style={[styles.totalRow, styles.grandTotal]}>
@@ -111,9 +134,11 @@ const CheckoutScreen = () => {
       <TouchableOpacity
         style={styles.checkoutButton}
         onPress={handlePlaceOrder}
-        disabled={deliveryOption === 'delivery' && !address}
+        disabled={deliveryOption === 'delivery' && !address.trim()}
       >
-        <Text style={styles.checkoutButtonText}>Place Order - ${total.toFixed(2)}</Text>
+        <Text style={styles.checkoutButtonText}>
+          {paymentMethod === 'card' ? 'Proceed to Payment' : 'Place Order'} - ${total.toFixed(2)}
+        </Text>
       </TouchableOpacity>
     </View>
   );
@@ -138,6 +163,7 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.1,
     shadowRadius: 3,
     elevation: 2,
+    zIndex: 1, // Add this to ensure sections stack properly
   },
   sectionTitle: {
     fontSize: 18,
@@ -175,6 +201,8 @@ const styles = StyleSheet.create({
     borderRadius: 8,
     padding: 12,
     marginTop: 10,
+    backgroundColor: '#fff',
+    zIndex: 2, // Higher than section but won't block touches below
   },
   totalRow: {
     flexDirection: 'row',
@@ -206,6 +234,18 @@ const styles = StyleSheet.create({
     fontWeight: 'bold',
     fontSize: 16,
   },
+  paymentSection: {
+    backgroundColor: 'white',
+    borderRadius: 10,
+    padding: 15,
+    marginBottom: 15,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.1,
+    shadowRadius: 3,
+    elevation: 2,
+    zIndex: 3, // Higher than input
+  }
 });
 
 export default CheckoutScreen;

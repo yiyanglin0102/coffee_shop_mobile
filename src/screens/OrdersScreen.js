@@ -29,7 +29,6 @@ export default function OrdersScreen() {
         contentContainerStyle={{ paddingBottom: 80 }}
       />
       
-      {/* Fixed Checkout Button */}
       <TouchableOpacity 
         style={styles.checkoutButton}
         onPress={handleCheckout}

@@ -5,7 +5,12 @@ import Icon from 'react-native-vector-icons/MaterialIcons';
 
 const OrderConfirmationScreen = ({ route }) => {
   const navigation = useNavigation();
-  const { orderId, total } = route.params;
+  const { 
+    orderId, 
+    total, 
+    paymentMethod = 'card', 
+    deliveryOption = 'delivery' 
+  } = route.params;
 
   return (
     <View style={styles.container}>
@@ -17,7 +22,14 @@ const OrderConfirmationScreen = ({ route }) => {
         <View style={styles.orderDetails}>
           <Text style={styles.detailText}>Order #: {orderId}</Text>
           <Text style={styles.detailText}>Total: ${total}</Text>
-          <Text style={styles.detailText}>Estimated delivery: 20-30 min</Text>
+          <Text style={styles.detailText}>
+            Payment Method: {paymentMethod === 'card' ? 'Credit Card' : 'Cash'}
+          </Text>
+          <Text style={styles.detailText}>
+            {deliveryOption === 'delivery' ? 
+              'Estimated delivery: 20-30 min' : 
+              'Ready for pickup in 15 min'}
+          </Text>
         </View>
       </View>
 
@@ -30,7 +42,6 @@ const OrderConfirmationScreen = ({ route }) => {
     </View>
   );
 };
-
 const styles = StyleSheet.create({
   container: {
     flex: 1,
