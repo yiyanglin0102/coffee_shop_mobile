@@ -1,16 +1,43 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, Animated, Easing, Image } from 'react-native';
+import {
+  View,
+  Text,
+  StyleSheet,
+  TouchableOpacity,
+  Animated,
+  Easing,
+  Image,
+  Alert,
+  Platform,
+  PermissionsAndroid,
+  NativeModules,
+  NativeEventEmitter
+} from 'react-native';
 import Icon from 'react-native-vector-icons/MaterialIcons';
-import { useNavigation } from '@react-navigation/native';
+import { useNavigation, useRoute } from '@react-navigation/native';
 
-const PaymentScreen = ({ route }) => {
+const PaymentScreen = () => {
   const navigation = useNavigation();
-  const { total } = route.params;
+  const route = useRoute();
+  const { total = '0.00' } = route.params || {};
+
   const [paymentMethod, setPaymentMethod] = useState('card');
   const [isProcessing, setIsProcessing] = useState(false);
   const [isCardFront, setIsCardFront] = useState(true);
+  const [readerStatus, setReaderStatus] = useState('checking'); // 'checking', 'connected', 'disconnected'
+  const [sdkAvailable, setSdkAvailable] = useState(false);
   const flipAnim = useRef(new Animated.Value(0)).current;
   const spinAnim = useRef(new Animated.Value(0)).current;
+  const [devMode] = useState(__DEV__); // Enable mock mode in development
+
+  // Initialize Square module with safe defaults
+  const SquarePayment = NativeModules.SquarePayment || {
+    checkReaderConnection: () => Promise.resolve(devMode), // Mock connection in dev mode
+    startPayment: () => devMode ? 
+      Promise.resolve({ transactionId: 'mock_' + Date.now() }) : 
+      Promise.reject(new Error('Square module not available')),
+    addReaderListener: () => {}
+  };
 
   // Spin animation for processing
   useEffect(() => {
@@ -28,6 +55,68 @@ const PaymentScreen = ({ route }) => {
     }
   }, [isProcessing]);
 
+  // Check if native module exists
+  useEffect(() => {
+    if (!NativeModules.SquarePayment && !devMode) {
+      console.error('SquarePayment native module not found!');
+      setReaderStatus('disconnected');
+      return;
+    }
+    setSdkAvailable(true);
+  }, []);
+
+  // Monitor reader connection status
+  useEffect(() => {
+    if (devMode) {
+      setReaderStatus('connected');
+      return;
+    }
+
+    const eventEmitter = new NativeEventEmitter();
+    let subscription;
+    let interval;
+
+    const setupConnectionMonitoring = async () => {
+      try {
+        // Initial check
+        const isConnected = await SquarePayment.checkReaderConnection();
+        setReaderStatus(isConnected ? 'connected' : 'disconnected');
+
+        // Listen for changes
+        subscription = eventEmitter.addListener(
+          'onReaderConnectionChange',
+          ({ isConnected }) => {
+            console.log('Reader connection changed:', isConnected);
+            setReaderStatus(isConnected ? 'connected' : 'disconnected');
+          }
+        );
+
+        // Periodic checks
+        interval = setInterval(async () => {
+          try {
+            const currentStatus = await SquarePayment.checkReaderConnection();
+            setReaderStatus(currentStatus ? 'connected' : 'disconnected');
+          } catch (error) {
+            console.error('Periodic check error:', error);
+          }
+        }, 3000);
+
+      } catch (error) {
+        console.error('Connection monitoring setup failed:', error);
+        setReaderStatus('disconnected');
+      }
+    };
+
+    if (sdkAvailable) {
+      setupConnectionMonitoring();
+    }
+
+    return () => {
+      subscription?.remove();
+      clearInterval(interval);
+    };
+  }, [sdkAvailable, devMode]);
+
   // Card flip animation
   const flipCard = () => {
     Animated.timing(flipAnim, {
@@ -38,23 +127,81 @@ const PaymentScreen = ({ route }) => {
     }).start(() => setIsCardFront(!isCardFront));
   };
 
-  // Update the handlePayment function in PaymentScreen.js:
-  const handlePayment = () => {
-    setIsProcessing(true);
-    setTimeout(() => {
-      setIsProcessing(false);
-      navigation.navigate('OrderConfirmation', {
-        orderId: route.params.orderId || `#${Math.floor(Math.random() * 10000)}`,
-        total: route.params.total,
-        paymentMethod: 'card',
-        items: route.params.cartItems,
-        deliveryOption: route.params.deliveryOption,
-        address: route.params.address
-      });
-    }, 2000);
+  const checkConnection = async () => {
+    setReaderStatus('checking');
+    try {
+      const isConnected = await SquarePayment.checkReaderConnection();
+      setReaderStatus(isConnected ? 'connected' : 'disconnected');
+      return isConnected;
+    } catch (error) {
+      console.error('Connection check failed:', error);
+      setReaderStatus('disconnected');
+      return false;
+    }
   };
 
-  // Interpolate animations
+  const handlePayment = async () => {
+    if (paymentMethod === 'card' && readerStatus !== 'connected') {
+      Alert.alert(
+        'Reader Not Connected',
+        'Please connect your Square reader before processing payment',
+        [{ text: 'OK' }]
+      );
+      return;
+    }
+
+    setIsProcessing(true);
+
+    try {
+      // Android Bluetooth permissions
+      if (Platform.OS === 'android') {
+        const granted = await PermissionsAndroid.requestMultiple([
+          PermissionsAndroid.PERMISSIONS.BLUETOOTH_SCAN,
+          PermissionsAndroid.PERMISSIONS.BLUETOOTH_CONNECT,
+          PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION,
+        ]);
+
+        // Check all permissions
+        const allGranted = Object.values(granted).every(
+          perm => perm === PermissionsAndroid.RESULTS.GRANTED
+        );
+        if (!allGranted) throw new Error('Required permissions not granted');
+      }
+
+      const amountCents = Math.round(parseFloat(total) * 100);
+      const result = await SquarePayment.startPayment(
+        amountCents,
+        'USD',
+        route.params?.orderId || 'N/A'
+      );
+
+      if (!result?.transactionId) {
+        throw new Error('Payment completed but no transaction ID received');
+      }
+
+      navigation.navigate('OrderConfirmation', {
+        orderId: route.params?.orderId,
+        total: total,
+        paymentMethod: paymentMethod,
+        transactionId: result.transactionId
+      });
+
+    } catch (error) {
+      let errorMessage = error.message || 'Could not complete payment';
+      
+      if (error.message.includes('permission')) {
+        errorMessage = 'Please grant all required permissions in app settings';
+      } else if (error.message.includes('connection')) {
+        errorMessage = 'Reader connection lost during payment';
+      }
+      
+      Alert.alert('Payment Failed', errorMessage, [{ text: 'OK' }]);
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
+  // Animation interpolations
   const frontInterpolate = flipAnim.interpolate({
     inputRange: [0, 180],
     outputRange: ['0deg', '180deg'],
@@ -93,40 +240,76 @@ const PaymentScreen = ({ route }) => {
 
       {/* Card Payment UI */}
       {paymentMethod === 'card' && (
-        <View style={styles.cardContainer}>
-          <TouchableOpacity onPress={flipCard} activeOpacity={0.9}>
-            {/* Front of Card */}
-            <Animated.View style={[
-              styles.card,
-              styles.cardFront,
-              { transform: [{ rotateY: frontInterpolate }] }
-            ]}>
-              <Image source={require('../assets/chip.png')} style={styles.chip} />
-              <Text style={styles.cardNumber}>•••• •••• •••• 4242</Text>
-              <View style={styles.cardFooter}>
-                <Text style={styles.cardText}>CARDHOLDER NAME</Text>
-                <Text style={styles.cardText}>EXP 12/25</Text>
-              </View>
-            </Animated.View>
-
-            {/* Back of Card */}
-            <Animated.View style={[
-              styles.card,
-              styles.cardBack,
-              { transform: [{ rotateY: backInterpolate }] }
-            ]}>
-              <View style={styles.magneticStrip} />
-              <View style={styles.cvvContainer}>
-                <Text style={styles.cvvText}>CVV</Text>
-                <View style={styles.cvvBox}>
-                  <Text style={styles.cvvNumber}>•••</Text>
+        <>
+          <View style={styles.cardContainer}>
+            <TouchableOpacity onPress={flipCard} activeOpacity={0.9}>
+              {/* Front of Card */}
+              <Animated.View style={[
+                styles.card,
+                styles.cardFront,
+                { transform: [{ rotateY: frontInterpolate }] }
+              ]}>
+                <Image source={require('../assets/chip.png')} style={styles.chip} />
+                <Text style={styles.cardNumber}>•••• •••• •••• 4242</Text>
+                <View style={styles.cardFooter}>
+                  <Text style={styles.cardText}>CARDHOLDER NAME</Text>
+                  <Text style={styles.cardText}>EXP 12/25</Text>
                 </View>
-              </View>
-            </Animated.View>
-          </TouchableOpacity>
+              </Animated.View>
 
-          <Text style={styles.flipText}>Tap card to flip</Text>
-        </View>
+              {/* Back of Card */}
+              <Animated.View style={[
+                styles.card,
+                styles.cardBack,
+                { transform: [{ rotateY: backInterpolate }] }
+              ]}>
+                <View style={styles.magneticStrip} />
+                <View style={styles.cvvContainer}>
+                  <Text style={styles.cvvText}>CVV</Text>
+                  <View style={styles.cvvBox}>
+                    <Text style={styles.cvvNumber}>•••</Text>
+                  </View>
+                </View>
+              </Animated.View>
+            </TouchableOpacity>
+
+            <Text style={styles.flipText}>Tap card to flip</Text>
+          </View>
+
+          {/* Reader Connection Status */}
+          <View style={[
+            styles.readerStatusContainer,
+            readerStatus === 'connected' && styles.readerConnected,
+            readerStatus === 'disconnected' && styles.readerDisconnected
+          ]}>
+            <Icon
+              name="bluetooth"
+              size={16}
+              color={
+                readerStatus === 'connected' ? '#4CAF50' :
+                  readerStatus === 'checking' ? '#FFC107' : '#FF5722'
+              }
+            />
+            <Text style={styles.readerStatusText}>
+              {readerStatus === 'checking' && 'Checking reader connection...'}
+              {readerStatus === 'connected' && 'Reader connected and ready'}
+              {readerStatus === 'disconnected' && 'Reader not connected'}
+            </Text>
+          </View>
+
+          {readerStatus === 'disconnected' && (
+            <TouchableOpacity 
+              style={styles.retryButton}
+              onPress={checkConnection}
+            >
+              <Text style={styles.retryText}>Retry Connection</Text>
+            </TouchableOpacity>
+          )}
+
+          {devMode && (
+            <Text style={styles.devModeText}>Development Mode: Using mock Square reader</Text>
+          )}
+        </>
       )}
 
       {/* Cash Payment UI */}
@@ -139,9 +322,12 @@ const PaymentScreen = ({ route }) => {
 
       {/* Payment Button */}
       <TouchableOpacity
-        style={styles.payButton}
+        style={[
+          styles.payButton,
+          (isProcessing || (paymentMethod === 'card' && readerStatus !== 'connected')) && styles.disabledButton
+        ]}
         onPress={handlePayment}
-        disabled={isProcessing}
+        disabled={isProcessing || (paymentMethod === 'card' && readerStatus !== 'connected')}
       >
         {isProcessing ? (
           <Animated.View style={styles.processing}>
@@ -200,7 +386,7 @@ const styles = StyleSheet.create({
   },
   cardContainer: {
     alignItems: 'center',
-    marginBottom: 30,
+    marginBottom: 20,
   },
   card: {
     width: '100%',
@@ -286,6 +472,9 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     marginTop: 'auto',
   },
+  disabledButton: {
+    backgroundColor: '#cccccc',
+  },
   payButtonText: {
     color: 'white',
     fontWeight: 'bold',
@@ -304,6 +493,41 @@ const styles = StyleSheet.create({
     borderTopColor: 'transparent',
     marginRight: 10,
   },
+  readerStatusContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 20,
+    padding: 10,
+    borderRadius: 8,
+  },
+  readerConnected: {
+    backgroundColor: '#e8f5e9',
+  },
+  readerDisconnected: {
+    backgroundColor: '#ffebee',
+  },
+  readerStatusText: {
+    marginLeft: 8,
+    fontSize: 14,
+  },
+  retryButton: {
+    backgroundColor: '#ff7043',
+    padding: 10,
+    borderRadius: 5,
+    marginTop: 10,
+    alignSelf: 'center',
+  },
+  retryText: {
+    color: 'white',
+    fontWeight: 'bold',
+  },
+  devModeText: {
+    textAlign: 'center',
+    color: '#666',
+    fontStyle: 'italic',
+    marginTop: 10,
+  }
 });
 
 export default PaymentScreen;
